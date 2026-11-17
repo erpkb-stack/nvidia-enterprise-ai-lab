@@ -1,0 +1,4 @@
+"use client";
+import {useEffect,useState} from "react";
+const API=process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000";
+export default function Technologies(){const [items,setItems]=useState<any[]>([]);useEffect(()=>{fetch(API+"/api/v1/technologies").then(r=>r.json()).then(setItems).catch(()=>{})},[]);return <main><a href="/">← Dashboard</a><div className="eyebrow" style={{marginTop:25}}>REFERENCE CATALOG</div><h1 className="title">NVIDIA Technology Explorer</h1><p className="sub">Validate versions and compatibility against official NVIDIA documentation before deployment.</p><div className="cards" style={{marginTop:20}}>{items.map(x=><article className="card" key={x.name}><span className="tag">{x.category}</span><h3>{x.name}</h3><p>{x.purpose}</p><p>When to use: {x.when_to_use}</p></article>)}</div></main>}
