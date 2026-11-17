@@ -12,14 +12,17 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
     volumes: [redis_data:/data]
+    restart: unless-stopped
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.12.5
     ports: ["6333:6333", "6334:6334"]
     volumes: [qdrant_data:/qdrant/storage]
+    restart: unless-stopped
   backend:
     build: ./backend
     env_file: .env
@@ -28,17 +31,22 @@ services:
       REDIS_URL: redis://redis:6379/0
       QDRANT_URL: http://qdrant:6333
       BACKEND_CORS_ORIGINS: http://localhost:3000
+      AUTO_CREATE_TABLES: "false"
     ports: ["8000:8000"]
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_started}
       qdrant: {condition: service_started}
+    restart: unless-stopped
   frontend:
-    build: ./frontend
-    environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     ports: ["3000:3000"]
-    depends_on: [backend]
+    depends_on:
+      backend: {condition: service_healthy}
+    restart: unless-stopped
 volumes:
   postgres_data:
   redis_data:

@@ -1,82 +1,163 @@
-from fastapi import FastAPI, Depends, HTTPException
+import json
+import logging
+import time
+import uuid
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
-from sqlalchemy import select
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
 from .config import settings
-from .database import Base, engine, get_db
-from .models import Project, Architecture
-from .catalog import TECHNOLOGIES, USE_CASES
-from .adapters import get_adapter
+from .database import Base, engine
+from .routers import architect, core, gpu_ops, inference_lab, oem, rag
+from .services.nvidia import UpstreamError
+from .services.perf_model import PerfInputError
+from .services.rag_ingest import IngestError
+from .services.vectorstore import VectorStoreUnavailable
 
-Base.metadata.create_all(bind=engine)
-app = FastAPI(title="NVIDIA Enterprise AI Solutions Architect Lab", version="0.1.0")
-app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.backend_cors_origins.split(",")], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+VERSION = "1.0.0"
 
-class ProjectIn(BaseModel):
-    name: str = Field(min_length=2, max_length=180)
-    customer: str = "Internal Lab"
-    use_case: str = "Enterprise Knowledge Assistant"
 
-class ArchitectureIn(BaseModel):
-    project_id: int
-    title: str
-    blueprint: dict
-    rationale: str = ""
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        data = {"ts": self.formatTime(record), "level": record.levelname, "logger": record.name,
+                "msg": record.getMessage()}
+        for key in ("request_id", "method", "path", "status", "duration_ms"):
+            if hasattr(record, key):
+                data[key] = getattr(record, key)
+        if record.exc_info:
+            data["exc"] = self.formatException(record.exc_info)
+        return json.dumps(data)
 
-class BenchmarkIn(BaseModel):
-    model: str = "Nemotron sample profile"
-    concurrency: int = Field(8, ge=1, le=256)
-    input_tokens: int = Field(512, ge=1, le=32768)
-    output_tokens: int = Field(128, ge=1, le=8192)
-    batch_size: int = Field(1, ge=1, le=256)
 
-@app.get("/")
-def root(): return {"name":app.title,"docs":"/docs"}
+def _configure_logging() -> None:
+    handler = logging.StreamHandler()
+    handler.setFormatter(JsonFormatter())
+    root = logging.getLogger()
+    root.handlers = [handler]
+    root.setLevel(settings.log_level.upper())
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
-@app.get("/api/v1/health")
-def health(): return {"status":"ok","environment":settings.app_env,"gpu_execution":"not_verified"}
 
-@app.get("/api/v1/technologies")
-def technologies(): return TECHNOLOGIES
+_configure_logging()
+log = logging.getLogger("app")
 
-@app.get("/api/v1/use-cases")
-def use_cases(): return USE_CASES
 
-@app.get("/api/v1/projects")
-def projects(db: Session = Depends(get_db)):
-    return [{"id":p.id,"name":p.name,"customer":p.customer,"use_case":p.use_case,"status":p.status,"created_at":p.created_at} for p in db.scalars(select(Project).order_by(Project.id.desc())).all()]
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    if settings.auto_create_tables:
+        Base.metadata.create_all(bind=engine)
+    log.info("startup env=%s llm_enabled=%s", settings.app_env, settings.llm_enabled)
+    yield
 
-@app.post("/api/v1/projects")
-def create_project(data: ProjectIn, db: Session = Depends(get_db)):
-    p=Project(**data.model_dump()); db.add(p); db.commit(); db.refresh(p)
-    return {"id":p.id,"name":p.name,"customer":p.customer,"use_case":p.use_case,"status":p.status,"created_at":p.created_at}
 
-@app.post("/api/v1/architectures")
-def save_architecture(data: ArchitectureIn, db: Session = Depends(get_db)):
-    if not db.get(Project,data.project_id): raise HTTPException(404,"Project not found")
-    a=Architecture(**data.model_dump()); db.add(a); db.commit(); db.refresh(a)
-    return {"id":a.id,"project_id":a.project_id,"title":a.title,"blueprint":a.blueprint}
+app = FastAPI(
+    title="NVIDIA Enterprise AI Solutions Architect Lab",
+    version=VERSION,
+    description="Enterprise RAG, inference performance engineering, solution architecture, "
+                "GPU/Kubernetes operations and OEM validation. Analytical estimates and simulations "
+                "are always labelled; they are never presented as hardware measurements.",
+    lifespan=lifespan,
+)
+app.add_middleware(
+    CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE"], allow_headers=["Content-Type", "X-Request-ID"],
+    expose_headers=["X-Request-ID", "Content-Disposition"],
+)
 
-@app.get("/api/v1/architectures")
-def architectures(project_id: int | None = None, db: Session = Depends(get_db)):
-    q=select(Architecture).order_by(Architecture.id.desc())
-    if project_id is not None: q=q.where(Architecture.project_id==project_id)
-    return [{"id":a.id,"project_id":a.project_id,"title":a.title,"blueprint":a.blueprint,"rationale":a.rationale} for a in db.scalars(q).all()]
 
-@app.post("/api/v1/benchmarks/simulate")
-def benchmark(data: BenchmarkIn):
-    work=data.input_tokens+data.output_tokens
-    tps=round(data.concurrency*data.batch_size*1000/max(1,work/80),2)
-    latency=round((data.input_tokens/180+data.output_tokens/65)*(1+data.concurrency/100),2)
-    return {"mode":"SIMULATION","warning":"Synthetic estimate only; not NVIDIA hardware measurement and not MLPerf.","model":data.model,"estimated_tokens_per_second":tps,"estimated_latency_seconds":latency,"p50_ms":round(latency*800,1),"p95_ms":round(latency*1250,1),"p99_ms":round(latency*1500,1)}
+REQUESTS = Counter("http_requests_total", "HTTP requests", ["method", "route", "status"])
+LATENCY = Histogram("http_request_duration_seconds", "HTTP request latency", ["method", "route"],
+                    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60))
 
-@app.get("/api/v1/inference/health")
-async def inference_health(): return await get_adapter().health()
 
-@app.post("/api/v1/inference/demo")
-async def inference_demo(data: dict):
-    prompt=str(data.get("prompt","")).strip()
-    if not prompt: raise HTTPException(400,"prompt is required")
-    if len(prompt)>12000: raise HTTPException(413,"prompt too long")
-    return await get_adapter().generate(prompt)
+def _route_template(request: Request) -> str:
+    # Use the route template (e.g. /api/v1/rag/documents/{doc_id}) to keep label cardinality bounded.
+    route = request.scope.get("route")
+    return getattr(route, "path", None) or "unmatched"
+
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:16]
+    start = time.perf_counter()
+    response = await call_next(request)
+    elapsed = time.perf_counter() - start
+    duration = round(elapsed * 1000, 1)
+    if request.url.path != "/metrics":
+        route = _route_template(request)
+        REQUESTS.labels(request.method, route, str(response.status_code)).inc()
+        LATENCY.labels(request.method, route).observe(elapsed)
+    response.headers["X-Request-ID"] = rid
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    if request.url.path not in ("/metrics", "/api/v1/health"):
+        log.info("request", extra={"request_id": rid, "method": request.method,
+                                   "path": request.url.path, "status": response.status_code,
+                                   "duration_ms": duration})
+    return response
+
+
+def _error(status: int, code: str, message: str, request: Request, details=None) -> JSONResponse:
+    body = {"error": {"code": code, "message": message}, "detail": message}
+    if details is not None:
+        body["error"]["details"] = details
+    rid = request.headers.get("X-Request-ID")
+    return JSONResponse(body, status_code=status, headers={"X-Request-ID": rid} if rid else None)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error(request: Request, exc: StarletteHTTPException):
+    return _error(exc.status_code, "http_error", str(exc.detail), request)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request: Request, exc: RequestValidationError):
+    details = [{"loc": ".".join(str(x) for x in e["loc"]), "msg": e["msg"]} for e in exc.errors()]
+    msg = "; ".join(f"{d['loc']}: {d['msg']}" for d in details[:3])
+    return _error(422, "validation_error", msg, request, details)
+
+
+@app.exception_handler(IngestError)
+async def ingest_error(request: Request, exc: IngestError):
+    return _error(422, "ingest_error", str(exc), request)
+
+
+@app.exception_handler(PerfInputError)
+async def perf_error(request: Request, exc: PerfInputError):
+    return _error(422, "invalid_scenario", str(exc), request)
+
+
+@app.exception_handler(UpstreamError)
+async def upstream_error(request: Request, exc: UpstreamError):
+    return _error(502, "upstream_error", str(exc), request)
+
+
+@app.exception_handler(VectorStoreUnavailable)
+async def vector_error(request: Request, exc: VectorStoreUnavailable):
+    return _error(503, "vector_store_unavailable", str(exc), request)
+
+
+@app.exception_handler(Exception)
+async def unhandled(request: Request, exc: Exception):
+    log.exception("unhandled error", extra={"path": request.url.path})
+    return _error(500, "internal_error", "Internal server error", request)
+
+
+for r in (core.router, rag.router, inference_lab.router, architect.router, gpu_ops.router, oem.router):
+    app.include_router(r)
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.get("/", include_in_schema=False)
+def root():
+    return {"name": app.title, "version": VERSION, "docs": "/docs", "metrics": "/metrics"}

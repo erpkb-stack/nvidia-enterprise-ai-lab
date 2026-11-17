@@ -1,13 +1,23 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
 from .config import settings
 
-kwargs = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-engine = create_engine(settings.database_url, pool_pre_ping=True, connect_args=kwargs)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+_sqlite = settings.database_url.startswith("sqlite")
+_connect_args = {"check_same_thread": False} if _sqlite else {}
+engine = create_engine(settings.database_url, pool_pre_ping=True, connect_args=_connect_args)
+
+if _sqlite:
+    # SQLite ignores ON DELETE CASCADE unless foreign keys are enabled per connection.
+    @event.listens_for(engine, "connect")
+    def _fk_on(dbapi_conn, _):
+        dbapi_conn.execute("PRAGMA foreign_keys=ON")
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+
 
 class Base(DeclarativeBase):
     pass
+
 
 def get_db():
     db = SessionLocal()

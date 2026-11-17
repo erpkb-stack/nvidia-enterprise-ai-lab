@@ -1,8 +1,97 @@
 "use client";
-import {useEffect,useState} from "react";
-const API=process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000";
-const links=[["Dashboard","/"],["Solution Architect Studio","/architect"],["Technology Explorer","/technologies"],["RAG Engineering","/rag"],["Model Serving","/serving"],["Fine-Tuning","/finetuning"],["GPU Troubleshooting","/troubleshooting"],["MLOps & Kubernetes","/mlops"],["Performance Benchmarking","/benchmark"],["OEM Validation","/oem"],["AI Agent Studio","/agents"],["Documentation Center","/docs-center"]];
-export default function Home(){const [health,setHealth]=useState<any>(null),[cases,setCases]=useState<any[]>([]),[tech,setTech]=useState<any[]>([]),[projects,setProjects]=useState<any[]>([]),[name,setName]=useState("Enterprise Knowledge Assistant POC"),[customer,setCustomer]=useState("Internal Lab"),[msg,setMsg]=useState("");
-useEffect(()=>{Promise.all([fetch(API+"/api/v1/health").then(r=>r.json()),fetch(API+"/api/v1/use-cases").then(r=>r.json()),fetch(API+"/api/v1/technologies").then(r=>r.json()),fetch(API+"/api/v1/projects").then(r=>r.json())]).then(([h,c,t,p])=>{setHealth(h);setCases(c);setTech(t);setProjects(p)}).catch(()=>setMsg("API unavailable. Start the backend on port 8000."))},[]);
-async function create(){const r=await fetch(API+"/api/v1/projects",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,customer})});if(r.ok){const p=await r.json();setProjects([p,...projects]);setMsg("Created project #"+p.id)}else setMsg("Project creation failed")}
-return <div className="shell"><aside className="side"><div className="brand"><span className="mark">N</span>NVIDIA AI LAB</div><div className="nav">{links.map(([label,url],i)=><div key={url}>{[0,1,3,8,10,11].includes(i)&&<div className="group">{({0:"OVERVIEW",1:"ARCHITECTURE",3:"ENGINEERING LABS",8:"ENGINEERING LABS",10:"AUTOMATION",11:"DELIVERABLES"} as any)[i]}</div>}<a className={i===0?"active":""} href={url}>{label}</a></div>)}</div><p className="sub" style={{marginTop:35,fontSize:10}}>LOCAL ENGINEERING ENVIRONMENT<br/>v0.1.0</p></aside><main><div className="top"><div><div className="eyebrow">ENTERPRISE AI ENGINEERING PLATFORM</div><h1 className="title">Solutions Architect Dashboard</h1><p className="sub">Design, build, validate, and optimize production-oriented AI solutions.</p></div><span className="status">{health?.status==="ok"?"● API CONNECTED":"● CONNECTING"}</span></div><div className="notice">Execution integrity: simulation-ready environment. No GPU workload or NVIDIA service is reported as real until configured and verified.</div><div className="grid"><div className="metric"><small>TECHNOLOGIES</small><strong>{tech.length||"—"}</strong><small>NVIDIA ecosystem catalog</small></div><div className="metric"><small>USE CASES</small><strong>{cases.length||"—"}</strong><small>Enterprise patterns</small></div><div className="metric"><small>SAVED PROJECTS</small><strong>{projects.length}</strong><small>PostgreSQL persistence</small></div><div className="metric"><small>GPU EXECUTION</small><strong style={{fontSize:18}}>Not verified</strong><small>Hardware integration pending</small></div></div><div className="section"><h2>Create enterprise AI project</h2><span className="tag">ARCHITECT WORKSPACE</span></div><div className="panel"><div className="formgrid"><div className="field"><label>PROJECT NAME</label><input className="input" value={name} onChange={e=>setName(e.target.value)}/></div><div className="field"><label>CUSTOMER / BUSINESS UNIT</label><input className="input" value={customer} onChange={e=>setCustomer(e.target.value)}/></div></div><div className="row" style={{marginTop:14}}><button className="btn" onClick={create}>Create project</button><span className="sub">{msg}</span></div></div><div className="section"><h2>Enterprise solution patterns</h2></div><div className="cards">{cases.map(c=><article className="card" key={c.id}><span className="tag">{c.pattern}</span><h3>{c.name}</h3><p>{c.problem}</p><p>Outcome: {c.outcome}</p><a className="sub" href={"/architect?usecase="+c.id}>Design solution →</a></article>)}</div><div className="section"><h2>Engineering workbench</h2></div><div className="cards">{links.slice(3).map(([label,url])=><a className="card" href={url} key={url}><h3>{label}</h3><p>Open module workspace and implementation roadmap.</p></a>)}</div></main></div>}
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { Badge, Button, ErrorBox, Field, Metric, PageHeader, Panel } from "../components/ui";
+import { errMsg, get, post } from "../lib/api";
+
+const FLAGSHIPS = [
+  ["01", "Enterprise RAG Assistant", "/rag", "Upload documents; hybrid semantic + keyword search, reranking, cited answers, retrieval evaluation."],
+  ["02", "LLM Inference Performance Lab", "/benchmark", "Throughput and latency vs batching, quantization, KV cache and tensor parallelism; live load tests."],
+  ["03", "Solution Architect Studio", "/architect", "Business requirements to architecture diagram, technology selection, GPU sizing and delivery plan."],
+  ["04", "GPU & Kubernetes Ops Lab", "/mlops", "NIM manifests, MIG / time-slicing, distributed inference plans, Xid / CUDA / NCCL troubleshooting."],
+  ["05", "OEM Validation Center", "/oem", "Validate server configurations against sizing rules and generate customer-ready POC reports."],
+];
+
+export default function Home() {
+  const [ready, setReady] = useState<any>(null);
+  const [counts, setCounts] = useState({ docs: 0, runs: 0, reports: 0 });
+  const [projects, setProjects] = useState<any[]>([]);
+  const [name, setName] = useState("Enterprise Knowledge Assistant POC");
+  const [customer, setCustomer] = useState("Internal Lab");
+  const [error, setError] = useState<string | null>(null);
+  const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    get("/api/v1/health/ready").then(setReady).catch((e) => setError(errMsg(e)));
+    get("/api/v1/projects").then(setProjects).catch(() => {});
+    Promise.all([get("/api/v1/rag/documents"), get("/api/v1/inference-lab/runs"), get("/api/v1/oem/reports")])
+      .then(([d, r, o]) => setCounts({ docs: d.length, runs: r.length, reports: o.length }))
+      .catch(() => {});
+  }, []);
+
+  async function create() {
+    setError(null);
+    try {
+      const p = await post("/api/v1/projects", { name, customer });
+      setProjects([p, ...projects]);
+      setMsg(`Created project #${p.id}`);
+    } catch (e) {
+      setError(errMsg(e));
+    }
+  }
+
+  const c = ready?.checks;
+  const nv = c?.nvidia_endpoint;
+  return (
+    <main>
+      <PageHeader eyebrow="ENTERPRISE AI ENGINEERING PLATFORM" title="Solutions Architect Dashboard"
+        sub="Design, build, validate and optimize production-oriented AI solutions on NVIDIA accelerated computing."
+        right={<Badge tone={ready?.status === "ready" ? "ok" : ready ? "warn" : "muted"}>
+          {ready ? (ready.status === "ready" ? "● API READY" : "● API DEGRADED") : "● CONNECTING"}</Badge>} />
+      <ErrorBox error={error && `${error} Start the backend on port 8000.`} />
+
+      <div className="grid">
+        <Metric label="DATABASE" value={c ? (c.database.ok ? "Online" : "Down") : "—"} hint={c?.database.backend} />
+        <Metric label="VECTOR STORE" value={c ? (c.vector_store.ok ? "Online" : "Down") : "—"} hint={c && `Qdrant (${c.vector_store.mode})`} />
+        <Metric label="NVIDIA ENDPOINT" value={nv ? (nv.mode === "live" ? "Live" : nv.mode === "fallback" ? "Not set" : "Error") : "—"}
+          hint={nv?.mode === "live" ? nv.chat_model : "Offline fallbacks active"} />
+        <Metric label="LAB ACTIVITY" value={`${counts.docs} / ${counts.runs} / ${counts.reports}`} hint="documents / benchmark runs / reports" />
+      </div>
+      <div className="notice">Execution integrity: analytical estimates and fallbacks are always labelled. No GPU
+        measurement is claimed unless a live endpoint is configured and the run is marked LIVE_MEASUREMENT.</div>
+
+      <div className="section"><h2>Flagship demonstrations</h2></div>
+      <div className="flagship">
+        {FLAGSHIPS.map(([n, title, href, text]) => (
+          <Link className="card" href={href} key={href}>
+            <span className="num">{n}</span>
+            <h3>{title}</h3>
+            <p>{text}</p>
+            <span className="sub">Open lab →</span>
+          </Link>
+        ))}
+      </div>
+
+      <div className="cols even">
+        <Panel title="Create enterprise AI project" right={<span className="tag">ARCHITECT WORKSPACE</span>}>
+          <div className="formgrid">
+            <Field label="Project name"><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></Field>
+            <Field label="Customer / business unit"><input className="input" value={customer} onChange={(e) => setCustomer(e.target.value)} /></Field>
+          </div>
+          <div className="row" style={{ marginTop: 14 }}>
+            <Button onClick={create}>Create project</Button>
+            <span className="sub">{msg}</span>
+          </div>
+        </Panel>
+        <Panel title="Recent projects">
+          {projects.length === 0 ? <p className="sub">No projects yet.</p> : (
+            <div className="tablewrap"><table className="t"><thead><tr><th>#</th><th>Name</th><th>Customer</th><th>Status</th></tr></thead>
+              <tbody>{projects.slice(0, 6).map((p) => (
+                <tr key={p.id}><td>{p.id}</td><td>{p.name}</td><td>{p.customer}</td><td><Badge tone="muted">{p.status}</Badge></td></tr>
+              ))}</tbody></table></div>
+          )}
+        </Panel>
+      </div>
+    </main>
+  );
+}
