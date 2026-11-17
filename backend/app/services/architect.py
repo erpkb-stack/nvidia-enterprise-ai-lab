@@ -72,7 +72,7 @@ def design(req: dict) -> dict:
     ]
     if rag:
         stack += [
-            _t("Retrieval", "NeMo Retriever embedding NIM (nv-embedqa-e5-v5)", "GPU-accelerated "
+            _t("Retrieval", "NeMo Retriever / Nemotron embedding NIM", "GPU-accelerated "
                "embeddings tuned for question/passage retrieval."),
             _t("Retrieval", "NeMo Retriever reranking NIM", "Cross-encoder reranking raises answer "
                "precision for the top passages sent to the LLM."),

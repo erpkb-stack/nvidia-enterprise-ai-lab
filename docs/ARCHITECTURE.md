@@ -8,7 +8,7 @@
 | API | FastAPI | One router per lab (`app/routers`), business logic in `app/services`, reference data in `app/data`. |
 | Relational store | PostgreSQL 16 (SQLite for tests) | SQLAlchemy 2 ORM, Alembic migrations. Source of truth for documents and chunks. |
 | Vector store | Qdrant | Cosine HNSW; collection name = `lab_<collection>_<embedder>`, so switching embedders never mixes vector spaces. |
-| Inference | NVIDIA API catalog or self-hosted NIM | OpenAI-compatible chat, embeddings (`nv-embedqa-e5-v5`) and reranking (`nv-rerankqa`). Called only from the backend. |
+| Inference | NVIDIA API catalog or self-hosted NIM | OpenAI-compatible chat (default `nemotron-3.5-bolt-e4b`), embeddings (default `nemotron-3.5-embed-1b`) and optional reranking. Models are configurable because catalog models are retired over time. Called only from the backend. |
 | Cache / jobs | Redis | Provisioned for background ingestion and caching (roadmap). |
 
 ## RAG pipeline

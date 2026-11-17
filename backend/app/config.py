@@ -24,12 +24,13 @@ class Settings(BaseSettings):
     # self-hosted base URL is configured.
     nvidia_nim_base_url: str = ""
     nvidia_nim_api_key: str = ""
-    nvidia_chat_model: str = "meta/llama-3.1-8b-instruct"
-    nvidia_embed_model: str = "nvidia/nv-embedqa-e5-v5"
-    nvidia_rerank_url: str = (
-        "https://ai.api.nvidia.com/v1/retrieval/nvidia/llama-3_2-nv-rerankqa-1b-v2/reranking"
-    )
-    nvidia_rerank_model: str = "nvidia/llama-3.2-nv-rerankqa-1b-v2"
+    # Defaults verified against the NVIDIA API catalog (2026-11). Catalog models are retired over time:
+    # check https://build.nvidia.com or GET {base_url}/models and override via environment variables.
+    nvidia_chat_model: str = "nvidia/nemotron-3.5-bolt-e4b"
+    nvidia_embed_model: str = "nvidia/nemotron-3.5-embed-1b"
+    # Empty = use the local reranker. Set to a reranking NIM endpoint (hosted or self-hosted) to enable.
+    nvidia_rerank_url: str = ""
+    nvidia_rerank_model: str = ""
     nvidia_timeout_seconds: float = 60.0
 
     # RAG limits
