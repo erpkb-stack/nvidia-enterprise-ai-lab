@@ -1,0 +1,28 @@
+
+# --- NVIDIA Enterprise AI Lab (deployed from /opt/ailab, see deploy/docker-compose.server.yml)
+ai-lab.groundwire.tech {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+	# Prometheus endpoint stays internal
+	respond /metrics 404
+
+	@api path /api/* /docs /docs/* /redoc /openapi.json
+	handle @api {
+		request_body {
+			max_size 20MB
+		}
+		reverse_proxy ailab-backend:8000 {
+			transport http {
+				read_timeout 300s
+			}
+		}
+	}
+	handle {
+		reverse_proxy ailab-frontend:3000
+	}
+}
